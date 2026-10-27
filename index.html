@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IT Inventory QR</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">IQ</div>
+          <div>
+            <strong>IT Inventory QR</strong>
+            <span>учет техники</span>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="Основная навигация">
+          <button class="nav-button active" data-view="dashboard">Панель</button>
+          <button class="nav-button" data-view="registry">Реестр</button>
+          <button class="nav-button" data-view="labels">QR метки</button>
+          <button class="nav-button" data-view="inventory">Инвентаризация</button>
+          <button class="nav-button" data-view="reports">Отчеты</button>
+          <button class="nav-button" data-view="import">Импорт</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          MVP прототип
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Командный проект</p>
+            <h1 id="view-title">Панель управления</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="ghost-button" id="reset-demo">Сбросить демоданные</button>
+            <button class="primary-button" id="add-asset">Добавить технику</button>
+          </div>
+        </header>
+
+        <section class="view active" id="dashboard-view" aria-labelledby="view-title">
+          <div class="metrics" id="metrics"></div>
+          <div class="content-grid two">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Недавние движения</h2>
+                <span>последние события</span>
+              </div>
+              <div id="movement-feed" class="feed"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Что требует внимания</h2>
+                <span>ремонт и списание</span>
+              </div>
+              <div id="attention-list" class="attention-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="registry-view" aria-labelledby="view-title">
+          <div class="toolbar">
+            <label class="search-field">
+              <span>Поиск</span>
+              <input id="asset-search" type="search" placeholder="Инвентарный номер, модель, владелец" />
+            </label>
+            <label>
+              <span>Категория</span>
+              <select id="category-filter"></select>
+            </label>
+            <label>
+              <span>Локация</span>
+              <select id="location-filter"></select>
+            </label>
+            <label>
+              <span>Статус</span>
+              <select id="status-filter"></select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Инв. номер</th>
+                  <th>Устройство</th>
+                  <th>Категория</th>
+                  <th>Локация</th>
+                  <th>Владелец</th>
+                  <th>Статус</th>
+                  <th>Стоимость</th>
+                </tr>
+              </thead>
+              <tbody id="asset-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" id="labels-view" aria-labelledby="view-title">
+          <div class="split-layout">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Пакетная печать QR</h2>
+                <span>выберите устройства для листа меток</span>
+              </div>
+              <div id="label-picker" class="check-list"></div>
+            </section>
+            <section class="panel print-zone">
+              <div class="panel-heading">
+                <h2>Предпросмотр меток</h2>
+                <button class="ghost-button" id="print-labels">Печать</button>
+              </div>
+              <div id="label-sheet" class="label-sheet"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="inventory-view" aria-labelledby="view-title">
+          <div class="inventory-layout">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Мобильная проверка</h2>
+                <span>режим можно открыть с телефона</span>
+              </div>
+              <label>
+                <span>Локация проверки</span>
+                <select id="inventory-location"></select>
+              </label>
+              <div class="scan-box">
+                <label>
+                  <span>Скан QR или ввод кода</span>
+                  <input id="scan-input" placeholder="Например INV-1001 или asset:1" />
+                </label>
+                <button class="primary-button" id="scan-button">Сканировать</button>
+              </div>
+              <div class="quick-scan" id="quick-scan"></div>
+              <button class="ghost-button full-width" id="add-unknown">Добавить найденный объект без QR</button>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Сверка план факт</h2>
+                <span id="inventory-summary">нет данных</span>
+              </div>
+              <div class="inventory-results" id="inventory-results"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="reports-view" aria-labelledby="view-title">
+          <div class="content-grid two">
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Где что находится</h2>
+                <button class="ghost-button" id="export-where">CSV</button>
+              </div>
+              <div id="where-report" class="report-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Что списывать</h2>
+                <button class="ghost-button" id="export-writeoff">CSV</button>
+              </div>
+              <div id="writeoff-report" class="report-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="import-view" aria-labelledby="view-title">
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Импорт из Excel через CSV</h2>
+              <span>первая версия принимает CSV или текст, скопированный из Excel</span>
+            </div>
+            <div class="import-grid">
+              <label>
+                <span>Файл CSV</span>
+                <input id="csv-file" type="file" accept=".csv,.txt" />
+              </label>
+              <button class="ghost-button" id="load-sample">Вставить пример</button>
+            </div>
+            <textarea id="csv-input" rows="8" placeholder="inventoryNumber,name,category,serial,location,owner,status,cost,purchaseDate"></textarea>
+            <div class="button-row">
+              <button class="primary-button" id="preview-import">Проверить импорт</button>
+              <button class="ghost-button" id="apply-import" disabled>Добавить в реестр</button>
+            </div>
+            <div id="import-preview" class="import-preview"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="asset-dialog">
+      <form method="dialog" id="asset-form" class="dialog-form">
+        <div class="dialog-heading">
+          <h2 id="dialog-title">Добавить технику</h2>
+          <button class="icon-button" value="cancel" aria-label="Закрыть">x</button>
+        </div>
+        <input type="hidden" id="asset-id" />
+        <div class="form-grid">
+          <label><span>Инвентарный номер</span><input id="inventory-number" required /></label>
+          <label><span>Название</span><input id="asset-name" required /></label>
+          <label><span>Категория</span><input id="asset-category" required /></label>
+          <label><span>Серийный номер</span><input id="asset-serial" /></label>
+          <label><span>Локация</span><input id="asset-location" required /></label>
+          <label><span>Владелец</span><input id="asset-owner" /></label>
+          <label><span>Статус</span><select id="asset-status"></select></label>
+          <label><span>Стоимость</span><input id="asset-cost" type="number" min="0" step="100" /></label>
+          <label><span>Дата покупки</span><input id="asset-purchase-date" type="date" /></label>
+          <label><span>Срок службы мес.</span><input id="asset-life" type="number" min="1" step="1" /></label>
+        </div>
+        <label><span>Комментарий</span><textarea id="asset-notes" rows="3"></textarea></label>
+        <div class="button-row end">
+          <button class="ghost-button" value="cancel">Отмена</button>
+          <button class="primary-button" id="save-asset" value="default">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="asset-details">
+      <div class="dialog-form details-dialog">
+        <div class="dialog-heading">
+          <h2 id="details-title">Карточка устройства</h2>
+          <button class="icon-button" id="close-details" aria-label="Закрыть">x</button>
+        </div>
+        <div id="details-body"></div>
+      </div>
+    </dialog>
+
+    <script src="./vendor/qrcode-browser.js"></script>
+    <script src="./src/app.js"></script>
+  </body>
+</html>
