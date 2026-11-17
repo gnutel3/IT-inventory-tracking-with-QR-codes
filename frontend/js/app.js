@@ -1,4 +1,5 @@
 const STORAGE_KEY = "it-inventory-qr-state-v1";
+const serverMode = new URLSearchParams(location.search).get("mode") === "server";
 
 const STATUSES = ["В эксплуатации", "На складе", "В ремонте", "Списано", "Потеряно"];
 
@@ -120,8 +121,14 @@ const demoState = {
   },
 };
 
-let state = loadState();
+let state = serverMode ? {
+  assets: [], movements: [], repairs: [], selectedLabelIds: [],
+  inventory: { location: "", scans: [], unknown: [] },
+} : loadState();
 let pendingImportRows = [];
+let serverBusy = false;
+let serverLoaded = false;
+let stopQrScanner;
 
 const titles = {
   dashboard: "Панель управления",
@@ -173,7 +180,38 @@ function loadState() {
 }
 
 function saveState() {
+  if (serverMode) return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function setServerBusy(busy) {
+  serverBusy = busy;
+  document.querySelector("#refresh-registry").disabled = busy;
+  document.querySelector("#add-asset").disabled = busy || !serverLoaded;
+  document.querySelector("#preview-import").disabled = busy || !serverLoaded;
+  els.applyImport.disabled = busy || !serverLoaded || !pendingImportRows.length ||
+    pendingImportRows.some((row) => row.errors.length);
+}
+
+async function refreshRegistry() {
+  if (serverBusy) return;
+  const status = document.querySelector("#server-status");
+  setServerBusy(true);
+  status.textContent = "Загрузка общего реестра…";
+  try {
+    const [assets, movements] = await Promise.all([inventoryApi.list(), inventoryApi.movements()]);
+    state.assets = assets;
+    state.movements = movements.reverse();
+    serverLoaded = true;
+    pendingImportRows = [];
+    els.importPreview.textContent = "";
+    renderAll();
+    status.textContent = "Общий реестр · подключено";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    setServerBusy(false);
+  }
 }
 
 function formatMoney(value) {
@@ -181,6 +219,13 @@ function formatMoney(value) {
 }
 
 function qrPayload(asset) {
+  if (serverMode && asset.qrToken) {
+    const url = new URL("/app/", location.origin);
+    url.searchParams.set("mode", "server");
+    url.searchParams.set("device", asset.qrToken);
+    return url.href;
+  }
+  if (serverMode) return `device:${asset.id}`;
   return `asset:${asset.id}|${asset.inventoryNumber}`;
 }
 
@@ -231,16 +276,16 @@ function renderQrSvg(text, size = 120) {
   qr.addData(text);
   qr.make();
   const count = qr.getModuleCount();
-  const cell = size / count;
+  const edge = count + 8;
   let rects = "";
   for (let row = 0; row < count; row += 1) {
     for (let col = 0; col < count; col += 1) {
       if (qr.isDark(row, col)) {
-        rects += `<rect x="${(col * cell).toFixed(2)}" y="${(row * cell).toFixed(2)}" width="${cell.toFixed(2)}" height="${cell.toFixed(2)}"/>`;
+        rects += `<rect x="${col + 4}" y="${row + 4}" width="1" height="1"/>`;
       }
     }
   }
-  return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="QR ${escapeHtml(text)}"><rect width="${size}" height="${size}" fill="#fff"/><g fill="#111">${rects}</g></svg>`;
+  return `<svg viewBox="0 0 ${edge} ${edge}" width="${size}" height="${size}" shape-rendering="crispEdges" role="img" aria-label="QR ${escapeHtml(text)}"><rect width="${edge}" height="${edge}" fill="#fff"/><g fill="#111">${rects}</g></svg>`;
 }
 
 function setOptions(select, values, allLabel = "Все") {
@@ -360,7 +405,9 @@ function classifyInventory() {
       rows.push({ type: "warn", title: scan.code, text: "QR не найден в базе" });
       return;
     }
-    if (asset.location !== location) {
+    if (serverMode && asset.status === "Списано") {
+      rows.push({ type: "warn", title: asset.inventoryNumber, text: `${asset.name}: списанное устройство` });
+    } else if (asset.location !== location) {
       rows.push({ type: "warn", title: asset.inventoryNumber, text: `${asset.name} закреплено за другой локацией: ${asset.location}` });
     }
   });
@@ -385,10 +432,15 @@ function renderInventory() {
   const found = rows.filter((row) => row.type === "ok").length;
   const issues = rows.filter((row) => row.type !== "ok").length;
   els.inventorySummary.textContent = `${found} найдено · ${issues} расхождений`;
-  els.inventoryResults.innerHTML = rows
-    .map((row) => `<div class="result-item ${row.type}"><div><strong>${escapeHtml(row.title)}</strong><br><span>${escapeHtml(row.text)}</span></div><span>${row.type === "ok" ? "OK" : "Проверить"}</span></div>`)
-    .join("") || `<div class="result-item"><span>Выберите локацию и начните сканирование.</span></div>`;
+  els.inventoryResults.innerHTML = inventoryRows(rows) || `<div class="result-item"><span>Выберите локацию и начните сканирование.</span></div>`;
+  document.querySelector("#finish-check").disabled = !location;
   saveState();
+}
+
+function inventoryRows(rows) {
+  return rows
+    .map((row) => `<div class="result-item ${row.type}"><div><strong>${escapeHtml(row.title)}</strong><br><span>${escapeHtml(row.text)}</span></div><span>${row.type === "ok" ? "OK" : "Проверить"}</span></div>`)
+    .join("");
 }
 
 function renderReports() {
@@ -414,31 +466,66 @@ function renderAll() {
 }
 
 function switchView(view) {
+  if (view !== "inventory") stopQrScanner?.();
   els.nav.forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   els.views.forEach((section) => section.classList.toggle("active", section.id === `${view}-view`));
   els.title.textContent = titles[view];
+  if (serverMode && view === "inventory") loadChecks();
 }
 
 function parseScannedAsset(code) {
   const normalized = code.trim();
-  const idMatch = normalized.match(/asset:(\d+)/);
-  if (idMatch) return assetById(idMatch[1]);
-  return state.assets.find((asset) => asset.inventoryNumber.toLowerCase() === normalized.toLowerCase() || qrPayload(asset) === normalized);
+  const qrToken = serverMode && normalized.match(/^qr:([a-f0-9]{32})$/)?.[1];
+  if (qrToken) return state.assets.find((asset) => asset.qrToken === qrToken);
+  const deviceId = serverMode && normalized.match(/^device:(\d+)$/)?.[1];
+  if (deviceId) return assetById(deviceId);
+  const demoId = !serverMode && normalized.match(/^asset:(\d+)\|/)?.[1];
+  if (demoId) return assetById(demoId);
+  const taggedNumber = normalized.match(/^asset:\d+\|(.+)$/)?.[1];
+  const number = taggedNumber || normalized;
+  const exact = state.assets.find((asset) => asset.inventoryNumber === number);
+  if (exact) return exact;
+  const matches = state.assets.filter((asset) => asset.inventoryNumber.toLowerCase() === number.toLowerCase());
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function scanFeedback(message) {
+  const status = document.querySelector("#scan-status");
+  status.textContent = message;
+  status.hidden = !message;
 }
 
 function addScan(code) {
-  if (!code.trim()) return;
-  const asset = parseScannedAsset(code);
+  const normalized = normalizeInventoryQr(code);
+  if (!normalized) return;
+  if (normalized.length > 200) {
+    scanFeedback("Код слишком длинный. Введите инвентарный номер.");
+    return;
+  }
+  if (!state.inventory.location) {
+    scanFeedback("Сначала выберите помещение.");
+    return;
+  }
+  const asset = parseScannedAsset(normalized);
+  if (state.inventory.scans.some((scan) => asset ? scan.assetId === asset.id : scan.code.toLowerCase() === normalized.toLowerCase())) {
+    els.scanInput.value = "";
+    scanFeedback("Код уже отмечен.");
+    return;
+  }
   state.inventory.scans.push({
-    code: code.trim(),
+    code: normalized,
     assetId: asset?.id || null,
     scannedAt: new Date().toISOString(),
   });
   els.scanInput.value = "";
   renderInventory();
+  scanFeedback(asset ? `Отмечено: ${asset.inventoryNumber}` : "Кода нет в реестре. Добавлен в расхождения.");
 }
 
 function openAssetDialog(asset = null) {
+  if (serverMode && (serverBusy || !serverLoaded)) return;
+  stopQrScanner?.();
+  document.querySelector("#asset-error").hidden = true;
   document.querySelector("#dialog-title").textContent = asset ? "Редактировать технику" : "Добавить технику";
   document.querySelector("#asset-id").value = asset?.id || "";
   document.querySelector("#inventory-number").value = asset?.inventoryNumber || "";
@@ -457,7 +544,7 @@ function openAssetDialog(asset = null) {
   els.assetDialog.showModal();
 }
 
-function saveAssetFromForm(event) {
+async function saveAssetFromForm(event) {
   event.preventDefault();
   const id = Number(document.querySelector("#asset-id").value);
   const formAsset = {
@@ -477,6 +564,35 @@ function saveAssetFromForm(event) {
 
   if (!formAsset.inventoryNumber || !formAsset.name || !formAsset.category || !formAsset.location) return;
 
+  if (serverMode) {
+    if (serverBusy || !serverLoaded) return;
+    const errorBox = document.querySelector("#asset-error");
+    const controls = els.assetForm.querySelectorAll("button");
+    errorBox.hidden = true;
+    setServerBusy(true);
+    controls.forEach((button) => { button.disabled = true; });
+    try {
+      const write = await inventoryApi.writer();
+      const saved = await write(formAsset, id || null);
+      const index = state.assets.findIndex((asset) => asset.id === saved.id);
+      if (index < 0) state.assets.push(saved);
+      else state.assets[index] = saved;
+      els.assetDialog.close();
+      renderAll();
+      inventoryApi.movements().then((items) => {
+        state.movements = items.reverse();
+        renderDashboard();
+      }).catch(() => {});
+    } catch (error) {
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+    } finally {
+      controls.forEach((button) => { button.disabled = false; });
+      setServerBusy(false);
+    }
+    return;
+  }
+
   const duplicate = state.assets.find((asset) => asset.inventoryNumber === formAsset.inventoryNumber && asset.id !== formAsset.id);
   if (duplicate) {
     alert("Инвентарный номер уже есть в реестре.");
@@ -493,6 +609,7 @@ function saveAssetFromForm(event) {
 }
 
 function openDetails(asset) {
+  if (!asset) return;
   document.querySelector("#details-title").textContent = `${asset.inventoryNumber} · ${asset.name}`;
   const repairs = state.repairs.filter((repair) => repair.assetId === asset.id);
   const movements = state.movements.filter((movement) => movement.assetId === asset.id);
@@ -506,11 +623,19 @@ function openDetails(asset) {
         <p><strong>Владелец:</strong> ${escapeHtml(asset.owner || "-")}</p>
         <p><strong>Статус:</strong> <span class="pill ${statusClass(asset.status)}">${escapeHtml(asset.status)}</span></p>
         <p><strong>Стоимость:</strong> ${formatMoney(asset.cost)} · остаточная ${formatMoney(residualValue(asset))} · амортизация ${depreciationPercent(asset)}%</p>
-        <p><strong>QR payload:</strong> ${escapeHtml(qrPayload(asset))}</p>
+        ${serverMode && asset.qrToken ? `<p><a href="${escapeHtml(qrPayload(asset))}">Ссылка на паспорт</a></p>` : ""}
       </div>
     </div>
-    <div class="detail-section"><h3>История перемещений</h3>${movements.map((item) => `<p>${escapeHtml(item.date)}: ${escapeHtml(item.from)} -> ${escapeHtml(item.to)} · ${escapeHtml(item.reason)}</p>`).join("") || "<p>Перемещений нет.</p>"}</div>
-    <div class="detail-section"><h3>Ремонты</h3>${repairs.map((item) => `<p>${escapeHtml(item.status)}: ${escapeHtml(item.issue)} · ${formatMoney(item.cost)} · ${escapeHtml(item.contractor)}</p>`).join("") || "<p>Ремонтов нет.</p>"}</div>
+    <div class="detail-section"><h3>История перемещений</h3><div id="device-movements">${movementRows(movements)}</div></div>
+    <div class="detail-section"><h3>Ремонты</h3>
+      <div id="device-repairs">${repairs.map((item) => `<p>${escapeHtml(item.status)}: ${escapeHtml(item.issue)} · ${formatMoney(item.cost)} · ${escapeHtml(item.contractor)}</p>`).join("") || "<p>Ремонтов нет.</p>"}</div>
+      ${serverMode ? `<form id="repair-form" class="form-grid">
+        <label><span>Неисправность</span><input name="issue" required maxlength="500" /></label>
+        <label><span>Исполнитель</span><input name="contractor" maxlength="120" /></label>
+        <label><span>Стоимость</span><input name="cost" type="number" min="0" step="0.01" /></label>
+        <button class="ghost-button" type="submit">Открыть ремонт</button>
+      </form><p id="repair-status" role="status"></p>` : ""}
+    </div>
     <div class="button-row end"><button class="ghost-button" id="edit-current">Редактировать</button></div>
   `;
   document.querySelector("#edit-current").addEventListener("click", () => {
@@ -518,6 +643,126 @@ function openDetails(asset) {
     openAssetDialog(asset);
   });
   els.assetDetails.showModal();
+  if (serverMode) wireHistory(asset.id);
+}
+
+function movementRows(items) {
+  return items.map((item) => `<p>${escapeHtml(item.date)}: ${escapeHtml(item.from)} → ${escapeHtml(item.to)} · ${escapeHtml(item.reason)}</p>`).join("") || "<p>Перемещений нет.</p>";
+}
+
+function wireHistory(id) {
+  const moveList = document.querySelector("#device-movements");
+  const repairList = document.querySelector("#device-repairs");
+  const form = document.querySelector("#repair-form");
+  const status = document.querySelector("#repair-status");
+  const endpoint = `devices/${id}/repairs`;
+  let busy = false;
+  moveList.textContent = "Загрузка…";
+  repairList.textContent = "Загрузка…";
+  inventoryApi.movements(id).then((items) => { moveList.innerHTML = movementRows(items); })
+    .catch((error) => { moveList.textContent = error.message; });
+
+  async function loadRepairs() {
+    const repairs = await inventoryApi.request(endpoint);
+    repairList.innerHTML = repairs.map((repair) => `<div class="result-item"><div>
+      <strong>${escapeHtml(repair.issue)}</strong><br>
+      <span>${escapeHtml(repair.started_at.slice(0, 10))} · ${repair.finished_at ? "Закрыт " + escapeHtml(repair.finished_at.slice(0, 10)) : "В работе"} · ${escapeHtml(repair.contractor || "Без исполнителя")} · ${formatMoney(repair.cost)}</span>
+      </div>${repair.finished_at ? "" : `<button type="button" class="ghost-button" data-close-repair="${repair.id}">Закрыть ремонт</button>`}</div>`).join("") || "<p>Ремонтов нет.</p>";
+  }
+
+  async function update(action, message = "") {
+    if (busy) return;
+    busy = true;
+    const submit = form.querySelector("button");
+    submit.disabled = true;
+    status.textContent = "Загрузка…";
+    try {
+      if (action) await action();
+      await loadRepairs();
+      status.textContent = message;
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+      busy = false;
+    }
+  }
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const values = new FormData(form);
+    update(async () => {
+      await inventoryApi.request(endpoint, "POST", {
+        issue: values.get("issue"), contractor: values.get("contractor"), cost: values.get("cost") || "0",
+      });
+      form.reset();
+    }, "Ремонт открыт.");
+  });
+  repairList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-close-repair]");
+    if (button) update(() => inventoryApi.request(`${endpoint}/${button.dataset.closeRepair}/close`, "PUT"), "Ремонт закрыт.");
+  });
+  update();
+}
+
+async function loadChecks() {
+  const list = document.querySelector("#saved-checks");
+  const refresh = document.querySelector("#refresh-checks");
+  if (refresh.disabled) return;
+  refresh.disabled = true;
+  try {
+    const checks = await inventoryApi.request("inventory-checks");
+    list.innerHTML = checks.map((check) => `<details data-check-id="${check.id}">
+      <summary>№${check.id} · ${escapeHtml(check.location)} · ${escapeHtml(check.created_at.slice(0, 10))} · ${check.found} из ${check.expected}</summary>
+      <div class="inventory-results"></div></details>`).join("") || "<p>Проверок пока нет.</p>";
+    list.querySelectorAll("details").forEach((entry) => {
+      entry.addEventListener("toggle", async () => {
+        if (!entry.open || entry.dataset.loaded) return;
+        const body = entry.lastElementChild;
+        entry.dataset.loaded = "pending";
+        body.textContent = "Загрузка…";
+        try {
+          const check = await inventoryApi.request(`inventory-checks/${entry.dataset.checkId}`);
+          body.innerHTML = inventoryRows(check.rows) || "<p>По этой локации ничего не найдено и ничего не ожидалось.</p>";
+          entry.dataset.loaded = "yes";
+        } catch (error) {
+          body.textContent = error.message;
+          delete entry.dataset.loaded;
+        }
+      });
+    });
+  } catch (error) {
+    list.textContent = error.message;
+  } finally {
+    refresh.disabled = false;
+  }
+}
+
+async function finishCheck() {
+  const draft = document.querySelector("#inventory-draft");
+  const status = document.querySelector("#check-status");
+  if (draft.inert || !state.inventory.location) return;
+  stopQrScanner?.();
+  if (!confirm(`Сохранить результаты проверки «${state.inventory.location}»?`)) return;
+  draft.inert = true;
+  status.hidden = false;
+  status.textContent = "Сохранение…";
+  try {
+    const check = await inventoryApi.request("inventory-checks", "POST", {
+      location: state.inventory.location,
+      codes: state.inventory.scans.map((scan) => scan.code),
+      unknown: state.inventory.unknown.map((item) => item.name),
+    });
+    state.inventory.scans = [];
+    state.inventory.unknown = [];
+    renderInventory();
+    status.textContent = `Проверка №${check.id} сохранена: найдено ${check.found} из ${check.expected}, расхождений ${check.rows.filter((row) => row.type !== "ok").length}.`;
+    await loadChecks();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    draft.inert = false;
+  }
 }
 
 function parseCsv(text) {
@@ -533,6 +778,7 @@ function parseCsv(text) {
 
 function previewImport() {
   const rows = parseCsv(els.csvInput.value);
+  const seen = new Set(state.assets.map((item) => item.inventoryNumber));
   pendingImportRows = rows.map((row, index) => {
     const asset = {
       id: Math.max(0, ...state.assets.map((item) => item.id)) + index + 1,
@@ -553,7 +799,11 @@ function previewImport() {
     if (!asset.name) errors.push("нет названия");
     if (!asset.category) errors.push("нет категории");
     if (!asset.location) errors.push("нет локации");
-    if (state.assets.some((item) => item.inventoryNumber === asset.inventoryNumber)) errors.push("дубль номера");
+    if (seen.has(asset.inventoryNumber)) errors.push("дубль номера");
+    seen.add(asset.inventoryNumber);
+    if (!STATUSES.includes(asset.status)) errors.push("неизвестный статус");
+    if (!Number.isFinite(asset.cost) || asset.cost < 0) errors.push("некорректная стоимость");
+    if (!Number.isInteger(asset.usefulLifeMonths) || asset.usefulLifeMonths < 1) errors.push("некорректный срок службы");
     return { asset, errors };
   });
 
@@ -563,7 +813,35 @@ function previewImport() {
   els.applyImport.disabled = !pendingImportRows.length || pendingImportRows.some((row) => row.errors.length);
 }
 
-function applyImport() {
+async function applyImport() {
+  if (!pendingImportRows.length || pendingImportRows.some((row) => row.errors.length)) return;
+  if (serverMode) {
+    if (serverBusy || !serverLoaded) return;
+    setServerBusy(true);
+    let added = 0;
+    let failure = "";
+    try {
+      const write = await inventoryApi.writer();
+      for (const { asset } of pendingImportRows) {
+        try {
+          state.assets.push(await write(asset));
+          added++;
+        } catch (error) {
+          throw new Error(`${asset.inventoryNumber}: ${error.message}`);
+        }
+      }
+    } catch (error) {
+      failure = error.message;
+    } finally {
+      pendingImportRows = [];
+      if (!failure) els.csvInput.value = "";
+      els.importPreview.textContent = failure ? `Добавлено: ${added}. Импорт остановлен. ${failure}` :
+        `Импорт выполнен. Добавлено: ${added}.`;
+      renderAll();
+      setServerBusy(false);
+    }
+    return;
+  }
   state.assets.push(...pendingImportRows.map((row) => row.asset));
   pendingImportRows = [];
   els.csvInput.value = "";
@@ -594,6 +872,12 @@ function wireEvents() {
     renderAll();
   });
   els.assetForm.addEventListener("submit", saveAssetFromForm);
+  els.assetDialog.querySelectorAll("[data-close-asset]").forEach((button) =>
+    button.addEventListener("click", () => els.assetDialog.close()));
+  els.assetDialog.addEventListener("cancel", (event) => {
+    if (serverBusy) event.preventDefault();
+  });
+  document.querySelector("#refresh-registry").addEventListener("click", refreshRegistry);
   document.querySelector("#close-details").addEventListener("click", () => els.assetDetails.close());
 
   [els.assetSearch, els.categoryFilter, els.locationFilter, els.statusFilter].forEach((control) => control.addEventListener("input", renderRegistry));
@@ -612,11 +896,14 @@ function wireEvents() {
   document.querySelector("#print-labels").addEventListener("click", () => window.print());
 
   els.inventoryLocation.addEventListener("change", () => {
+    stopQrScanner();
+    scanFeedback("");
     state.inventory.location = els.inventoryLocation.value;
     state.inventory.scans = [];
     state.inventory.unknown = [];
     renderInventory();
   });
+  stopQrScanner = wireQrScanner(addScan, scanFeedback);
   document.querySelector("#scan-button").addEventListener("click", () => addScan(els.scanInput.value));
   els.scanInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") addScan(els.scanInput.value);
@@ -626,7 +913,14 @@ function wireEvents() {
     if (button) addScan(button.dataset.code);
   });
   document.querySelector("#add-unknown").addEventListener("click", () => {
-    state.inventory.unknown.push({ name: "Неизвестный переходник", createdAt: new Date().toISOString() });
+    const input = document.querySelector("#unknown-name");
+    const name = serverMode ? input.value.trim() : "Неизвестный переходник";
+    if (!name) {
+      input.focus();
+      return;
+    }
+    state.inventory.unknown.push({ name, createdAt: new Date().toISOString() });
+    input.value = "";
     renderInventory();
   });
 
@@ -652,3 +946,23 @@ function wireEvents() {
 
 wireEvents();
 renderAll();
+if (serverMode) {
+  document.querySelector("#reset-demo").hidden = true;
+  document.querySelector("#refresh-registry").hidden = false;
+  document.querySelector("#server-status").hidden = false;
+  document.querySelector("#unknown-name-field").hidden = false;
+  document.querySelector("#finish-check-controls").hidden = false;
+  document.querySelector("#saved-checks-panel").hidden = false;
+  document.querySelector("#finish-check").addEventListener("click", finishCheck);
+  document.querySelector("#refresh-checks").addEventListener("click", loadChecks);
+  refreshRegistry().then(() => {
+    if (!serverLoaded) return;
+    const params = new URLSearchParams(location.search);
+    if (!params.has("device")) return;
+    switchView("registry");
+    const token = inventoryQrToken(params.get("device"));
+    const asset = token && state.assets.find((item) => item.qrToken === token);
+    if (asset) openDetails(asset);
+    else document.querySelector("#server-status").textContent = "Устройство по этой QR-метке не найдено.";
+  });
+}

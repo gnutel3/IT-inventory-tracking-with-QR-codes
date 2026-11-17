@@ -40,9 +40,11 @@
           </div>
           <div class="topbar-actions">
             <button class="ghost-button" id="reset-demo">Сбросить демоданные</button>
+            <button class="ghost-button" id="refresh-registry" hidden>Обновить реестр</button>
             <button class="primary-button" id="add-asset">Добавить технику</button>
           </div>
         </header>
+        <p id="server-status" role="status" hidden></p>
 
         <section class="view active" id="dashboard-view" aria-labelledby="view-title">
           <div class="metrics" id="metrics"></div>
@@ -122,7 +124,7 @@
 
         <section class="view" id="inventory-view" aria-labelledby="view-title">
           <div class="inventory-layout">
-            <section class="panel">
+            <section class="panel" id="inventory-draft">
               <div class="panel-heading">
                 <h2>Мобильная проверка</h2>
                 <span>режим можно открыть с телефона</span>
@@ -134,12 +136,25 @@
               <div class="scan-box">
                 <label>
                   <span>Скан QR или ввод кода</span>
-                  <input id="scan-input" placeholder="Например INV-1001 или asset:1" />
+                  <input id="scan-input" maxlength="200" placeholder="Например INV-1001" />
                 </label>
-                <button class="primary-button" id="scan-button">Сканировать</button>
+                <button class="primary-button" id="scan-button">Отметить</button>
               </div>
+              <div class="button-row">
+                <button type="button" class="ghost-button" id="start-camera">Камера</button>
+                <button type="button" class="ghost-button" id="capture-qr">Снять фото</button>
+                <button type="button" class="ghost-button" id="upload-qr">Загрузить фото</button>
+              </div>
+              <input type="file" accept="image/*" capture="environment" id="qr-capture-input" hidden />
+              <input type="file" accept="image/*" id="qr-upload-input" hidden />
+              <video id="qr-video" muted playsinline hidden></video>
+              <p id="scan-status" role="status" hidden></p>
               <div class="quick-scan" id="quick-scan"></div>
+              <label id="unknown-name-field" hidden><span>Название объекта без QR</span><input id="unknown-name" maxlength="200" placeholder="Например, USB-C переходник" /></label>
               <button class="ghost-button full-width" id="add-unknown">Добавить найденный объект без QR</button>
+              <div id="finish-check-controls" hidden>
+                <button type="button" class="primary-button" id="finish-check">Завершить и сохранить</button>
+              </div>
             </section>
 
             <section class="panel">
@@ -148,6 +163,14 @@
                 <span id="inventory-summary">нет данных</span>
               </div>
               <div class="inventory-results" id="inventory-results"></div>
+              <p id="check-status" role="status" hidden></p>
+              <section id="saved-checks-panel" class="detail-section" hidden>
+                <div class="panel-heading">
+                  <h2>Сохранённые проверки</h2>
+                  <button type="button" class="ghost-button" id="refresh-checks">Обновить</button>
+                </div>
+                <div id="saved-checks"></div>
+              </section>
             </section>
           </div>
         </section>
@@ -199,7 +222,7 @@
       <form method="dialog" id="asset-form" class="dialog-form">
         <div class="dialog-heading">
           <h2 id="dialog-title">Добавить технику</h2>
-          <button class="icon-button" value="cancel" aria-label="Закрыть">x</button>
+          <button type="button" class="icon-button" data-close-asset aria-label="Закрыть">x</button>
         </div>
         <input type="hidden" id="asset-id" />
         <div class="form-grid">
@@ -210,13 +233,14 @@
           <label><span>Локация</span><input id="asset-location" required /></label>
           <label><span>Владелец</span><input id="asset-owner" /></label>
           <label><span>Статус</span><select id="asset-status"></select></label>
-          <label><span>Стоимость</span><input id="asset-cost" type="number" min="0" step="100" /></label>
+          <label><span>Стоимость</span><input id="asset-cost" type="number" min="0" step="0.01" /></label>
           <label><span>Дата покупки</span><input id="asset-purchase-date" type="date" /></label>
           <label><span>Срок службы мес.</span><input id="asset-life" type="number" min="1" step="1" /></label>
         </div>
         <label><span>Комментарий</span><textarea id="asset-notes" rows="3"></textarea></label>
+        <p id="asset-error" role="alert" hidden></p>
         <div class="button-row end">
-          <button class="ghost-button" value="cancel">Отмена</button>
+          <button type="button" class="ghost-button" data-close-asset>Отмена</button>
           <button class="primary-button" id="save-asset" value="default">Сохранить</button>
         </div>
       </form>
@@ -232,7 +256,10 @@
       </div>
     </dialog>
 
-    <script src="./qrcode-browser.js"></script>
-    <script src="./app.js"></script>
+    <script src="./vendor/qrcode-browser.js"></script>
+    <script src="./vendor/jsQR.js"></script>
+    <script src="./js/inventory-api.js"></script>
+    <script src="./js/qr-scanner.js"></script>
+    <script src="./js/app.js"></script>
   </body>
 </html>

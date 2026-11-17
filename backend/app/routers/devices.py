@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import Category, Device, Location
+from app.models import Category, Device, DeviceProfile, DeviceQrTag, Location, Movement, Repair
 from app.schemas import DeviceCreate, DeviceRead, DeviceUpdate
 
 router = APIRouter(prefix="/api/v1/devices", tags=["Устройства"])
@@ -27,6 +27,16 @@ def save(db: Session, device: Device):
         raise HTTPException(409, "Инвентарный номер уже используется")
 
 
+def apply_values(device: Device, values: dict):
+    for key in ("owner", "useful_life_months"):
+        if key in values:
+            if device.profile is None:
+                device.profile = DeviceProfile()
+            setattr(device.profile, key, values.pop(key))
+    for key, value in values.items():
+        setattr(device, key, value)
+
+
 @router.get("", response_model=list[DeviceRead])
 def list_devices(
     search: str | None = None,
@@ -37,7 +47,7 @@ def list_devices(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    stmt = select(Device).order_by(Device.id)
+    stmt = select(Device).options(selectinload(Device.profile), selectinload(Device.qr_tag)).order_by(Device.id)
     if search:
         stmt = stmt.where(Device.name.ilike(f"%{search}%") | Device.inventory_number.ilike(f"%{search}%"))
     if location_id is not None:
@@ -61,30 +71,37 @@ def get_device(device_id: int, db: Session = Depends(get_db)):
 def create_device(payload: DeviceCreate, db: Session = Depends(get_db)):
     values = payload.model_dump()
     validate_references(db, values)
-    device = Device(**values)
+    device = Device(qr_tag=DeviceQrTag())
+    apply_values(device, values)
     db.add(device)
     return save(db, device)
 
 
 @router.put("/{device_id}", response_model=DeviceRead)
 def update_device(device_id: int, payload: DeviceUpdate, db: Session = Depends(get_db)):
-    device = db.get(Device, device_id)
+    device = db.get(Device, device_id, with_for_update=True)
     if device is None:
         raise HTTPException(404, "Устройство не найдено")
     values = payload.model_dump(exclude_unset=True)
-    for required in ("inventory_number", "name", "status"):
+    for required in ("inventory_number", "name", "status", "useful_life_months"):
         if required in values and values[required] is None:
             raise HTTPException(422, f"Поле {required} не может быть null")
     validate_references(db, values)
-    for key, value in values.items():
-        setattr(device, key, value)
+    if "location_id" in values and values["location_id"] != device.location_id:
+        destination = db.get(Location, values["location_id"]) if values["location_id"] else None
+        db.add(Movement(device_id=device.id, from_location=device.location.name if device.location else None,
+                        to_location=destination.name if destination else None))
+    apply_values(device, values)
     return save(db, device)
 
 
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_device(device_id: int, db: Session = Depends(get_db)):
-    device = db.get(Device, device_id)
+    device = db.get(Device, device_id, with_for_update=True)
     if device is None:
         raise HTTPException(404, "Устройство не найдено")
+    if any(db.scalar(select(model.id).where(model.device_id == device_id).limit(1))
+           for model in (Movement, Repair)):
+        raise HTTPException(409, "У устройства есть история. Вместо удаления его можно списать.")
     db.delete(device)
     db.commit()

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,6 +35,8 @@ class DeviceBase(BaseModel):
     description: str | None = None
     category_id: int | None = None
     location_id: int | None = None
+    owner: str | None = Field(None, max_length=120)
+    useful_life_months: int = Field(36, ge=1)
 
 
 class DeviceCreate(DeviceBase):
@@ -52,10 +55,65 @@ class DeviceUpdate(BaseModel):
     description: str | None = None
     category_id: int | None = None
     location_id: int | None = None
+    owner: str | None = Field(None, max_length=120)
+    useful_life_months: int | None = Field(None, ge=1)
 
 
 class DeviceRead(DeviceBase):
     id: int
+    qr_token: str | None
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class MovementRead(BaseModel):
+    id: int
+    device_id: int
+    from_location: str | None
+    to_location: str | None
+    moved_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RepairCreate(BaseModel):
+    issue: str = Field(min_length=1, max_length=500)
+    contractor: str = Field(default="", max_length=120)
+    cost: Decimal = Field(default=0, ge=0, max_digits=12, decimal_places=2)
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class RepairRead(RepairCreate):
+    id: int
+    started_at: datetime
+    finished_at: datetime | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+InventoryText = Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class InventoryCheckCreate(BaseModel):
+    location: str = Field(min_length=1, max_length=100)
+    codes: list[InventoryText] = Field(default_factory=list, max_length=5000)
+    unknown: list[InventoryText] = Field(default_factory=list, max_length=5000)
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class InventoryRow(BaseModel):
+    type: Literal["ok", "bad", "warn"]
+    title: str
+    text: str
+
+
+class InventoryCheckSummary(BaseModel):
+    id: int
+    location: str
+    created_at: datetime
+    expected: int
+    found: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InventoryCheckRead(InventoryCheckSummary):
+    rows: list[InventoryRow]
