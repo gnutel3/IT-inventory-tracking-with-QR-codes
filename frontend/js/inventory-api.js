@@ -13,7 +13,8 @@ const inventoryApi = (() => {
       response = await fetch(`/api/v1/${path}`, {
         method,
         cache: "no-store",
-        ...(data && { headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }),
+        ...(data instanceof FormData ? { body: data } :
+          data && { headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }),
       });
     } catch {
       throw new Error("Нет связи с сервером. Проверьте подключение и обновите реестр.");

@@ -1,10 +1,13 @@
 import os
 import tempfile
+from datetime import date
+from io import BytesIO
 
 # Отдельная временная БД для теста — не портим рабочую базу.
 tempdir = tempfile.mkdtemp(prefix="inventory-test-")
 os.environ["DATABASE_URL"] = f"sqlite:///{tempdir}/test.db"
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 from app.main import app
 
 def test_device_crud():
@@ -147,3 +150,65 @@ def test_qr_tags_survive_upgrade_and_renumbering():
         assert client.delete(f"/api/v1/devices/{old['id']}").status_code == 204
         replacement = client.post("/api/v1/devices", json={"inventory_number": "QR-DELETE", "name": "Replacement"})
         assert replacement.json()["qr_token"] != old["qr_token"]
+
+
+def excel_upload(rows, headers=("Инвентарный номер", "Название", "Категория", "Локация", "Стоимость", "Дата покупки", "Срок службы")):
+    book = Workbook()
+    sheet = book.active
+    sheet.append(headers)
+    for row in rows:
+        sheet.append(row)
+    buffer = BytesIO()
+    book.save(buffer)
+    return {"file": ("devices.xlsx", buffer.getvalue())}
+
+
+def test_excel_preview_and_atomic_import():
+    with TestClient(app) as client:
+        path = "/api/v1/import/xlsx"
+        template = client.get(f"{path}/template")
+        assert template.status_code == 200
+        assert client.post(f"{path}/preview", files={"file": ("template.xlsx", template.content)}).json()["rows"][0]["errors"] == []
+        good = ["000037", "Monitor", "Excel monitor", "Excel room", "2 300,45", date(2023, 2, 14), 48]
+        wrong = ["EXCEL-ERR", "", "Excel monitor", "Excel room", "-500", "bad-date", 0]
+        mixed = excel_upload([good, wrong])
+        rows = client.post(f"{path}/preview", files=mixed).json()["rows"]
+        assert rows[0] == {"row": 2, "inventory_number": "000037", "name": "Monitor", "errors": []}
+        assert rows[1]["row"] == 3
+        assert len(rows[1]["errors"]) == 4
+        assert client.post(f"{path}/apply", files=mixed).status_code == 422
+        assert client.get("/api/v1/devices", params={"search": "000037"}).json() == []
+        assert not any(row["name"] == "Excel room" for row in client.get("/api/v1/locations").json())
+
+        duplicates = client.post(f"{path}/preview", files=excel_upload([good, good])).json()["rows"]
+        assert all("повторяется" in row["errors"][0] for row in duplicates)
+        data = excel_upload([good, ["EXCEL-2", "Second", "Excel monitor", "Excel room", 20, "15.03.2024", 24]])
+        assert client.post(f"{path}/apply", files=data).json() == {"added": 2}
+        saved = client.get("/api/v1/devices", params={"search": "000037"}).json()[0]
+        assert (saved["inventory_number"], saved["purchase_price"], saved["purchase_date"]) == ("000037", "2300.45", "2023-02-14")
+        assert saved["useful_life_months"] == 48
+        assert len(saved["qr_token"]) == 32
+        assert client.post(f"{path}/apply", files=data).status_code == 422
+        assert len(client.get("/api/v1/devices", params={"search": "EXCEL-2"}).json()) == 1
+
+
+def test_excel_rejects_wrong_headers_and_formulas():
+    with TestClient(app) as client:
+        url = "/api/v1/import/xlsx/preview"
+        assert client.post(url, files={"file": ("bad.xlsx", b"not a workbook")}).status_code == 422
+        assert client.post(url, files=excel_upload([], headers=["Название"])).status_code == 422
+        workbook = excel_upload([["EXCEL-FORMULA", "=1+1", "Monitor", "Room", None, None, None]])
+        assert "формулы" in client.post(url, files=workbook).json()["rows"][0]["errors"][0]
+        overflow = excel_upload([["EXCEL-" + str(i), "Monitor", "Monitor", "Room"] for i in range(501)])
+        assert client.post(url, files=overflow).status_code == 422
+
+
+def test_depreciation_rules_are_shared_and_validated():
+    url = "/api/v1/depreciation/rules"
+    with TestClient(app) as first, TestClient(app) as second:
+        assert first.get(url).json()["writeoff_threshold_percent"] == 90
+        rules = {"term_mode": "fixed", "fixed_months": 48, "residual_floor_percent": 10, "writeoff_threshold_percent": 75}
+        assert first.put(url, json=rules).json() == rules
+        assert second.get(url).json() == rules
+        assert first.put(url, json={**rules, "fixed_months": 0}).status_code == 422
+        assert second.get(url).json() == rules
