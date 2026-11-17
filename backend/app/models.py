@@ -74,6 +74,16 @@ class DeviceQrTag(Base):
     token: Mapped[str] = mapped_column(String(32), unique=True, default=lambda: uuid4().hex)
 
 
+class DepreciationSettings(Base):
+    __tablename__ = "depreciation_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    term_mode: Mapped[str] = mapped_column(String(10))
+    fixed_months: Mapped[int]
+    residual_floor_percent: Mapped[int]
+    writeoff_threshold_percent: Mapped[int]
+
+
 class Movement(Base):
     __tablename__ = "device_movements"
 

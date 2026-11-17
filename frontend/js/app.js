@@ -129,6 +129,8 @@ let pendingImportRows = [];
 let serverBusy = false;
 let serverLoaded = false;
 let stopQrScanner;
+let depreciationRules = defaultDepreciationRules;
+let paintDepreciation;
 
 const titles = {
   dashboard: "Панель управления",
@@ -199,9 +201,13 @@ async function refreshRegistry() {
   setServerBusy(true);
   status.textContent = "Загрузка общего реестра…";
   try {
-    const [assets, movements] = await Promise.all([inventoryApi.list(), inventoryApi.movements()]);
+    const [assets, movements, rules] = await Promise.all([
+      inventoryApi.list(), inventoryApi.movements(), inventoryApi.request("depreciation/rules"),
+    ]);
     state.assets = assets;
     state.movements = movements.reverse();
+    depreciationRules = rules;
+    paintDepreciation(rules);
     serverLoaded = true;
     pendingImportRows = [];
     els.importPreview.textContent = "";
@@ -215,7 +221,7 @@ async function refreshRegistry() {
 }
 
 function formatMoney(value) {
-  return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(Number(value || 0));
+  return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(Number(value || 0));
 }
 
 function qrPayload(asset) {
@@ -229,24 +235,8 @@ function qrPayload(asset) {
   return `asset:${asset.id}|${asset.inventoryNumber}`;
 }
 
-function monthsBetween(from, to = new Date()) {
-  if (!from) return 0;
-  const start = new Date(from);
-  return Math.max(0, (to.getFullYear() - start.getFullYear()) * 12 + to.getMonth() - start.getMonth());
-}
-
-function residualValue(asset) {
-  const cost = Number(asset.cost || 0);
-  const life = Number(asset.usefulLifeMonths || 36);
-  const used = monthsBetween(asset.purchaseDate);
-  const residual = Math.max(0, cost * (1 - used / life));
-  return Math.round(residual);
-}
-
-function depreciationPercent(asset) {
-  const cost = Number(asset.cost || 0);
-  if (!cost) return 0;
-  return Math.round((1 - residualValue(asset) / cost) * 100);
+function depreciationLabel(percent) {
+  return `${Math.floor(percent * 10) / 10}%`;
 }
 
 function statusClass(status) {
@@ -297,7 +287,7 @@ function setOptions(select, values, allLabel = "Все") {
 function renderDashboard() {
   const active = state.assets.filter((asset) => asset.status === "В эксплуатации").length;
   const repair = state.assets.filter((asset) => asset.status === "В ремонте").length;
-  const writeoff = state.assets.filter((asset) => depreciationPercent(asset) >= 90 || asset.status === "Потеряно").length;
+  const writeoff = state.assets.filter((asset) => writeoffReason(asset, depreciationRules)).length;
   const totalCost = state.assets.reduce((sum, asset) => sum + Number(asset.cost || 0), 0);
 
   els.metrics.innerHTML = [
@@ -319,10 +309,10 @@ function renderDashboard() {
     .join("");
 
   const attention = state.assets
-    .filter((asset) => asset.status === "В ремонте" || depreciationPercent(asset) >= 90 || asset.status === "Потеряно")
+    .filter((asset) => asset.status === "В ремонте" || writeoffReason(asset, depreciationRules))
     .map((asset) => {
-      const reason = asset.status === "В ремонте" ? "нужно контролировать ремонт" : `амортизация ${depreciationPercent(asset)}%`;
-      return `<div class="attention-item"><strong>${escapeHtml(asset.inventoryNumber)} · ${escapeHtml(asset.name)}</strong><span>${escapeHtml(reason)} · остаточная стоимость ${formatMoney(residualValue(asset))}</span></div>`;
+      const reason = asset.status === "В ремонте" ? "нужно контролировать ремонт" : writeoffReason(asset, depreciationRules);
+      return `<div class="attention-item"><strong>${escapeHtml(asset.inventoryNumber)} · ${escapeHtml(asset.name)}</strong><span>${escapeHtml(reason)} · остаточная стоимость ${formatMoney(calculateDepreciation(asset, depreciationRules).residual)}</span></div>`;
     });
   els.attentionList.innerHTML = attention.join("") || `<div class="attention-item"><strong>Критичных задач нет</strong><span>Суммарная стоимость базы: ${formatMoney(totalCost)}</span></div>`;
 }
@@ -451,8 +441,11 @@ function renderReports() {
   els.whereReport.innerHTML = groups.join("");
 
   const candidates = state.assets
-    .filter((asset) => depreciationPercent(asset) >= 90 || asset.status === "Потеряно")
-    .map((asset) => `<div class="report-item"><strong>${escapeHtml(asset.inventoryNumber)} · ${escapeHtml(asset.name)}</strong><span>Амортизация ${depreciationPercent(asset)}% · остаточная ${formatMoney(residualValue(asset))} · ${escapeHtml(asset.status)}</span></div>`);
+    .filter((asset) => writeoffReason(asset, depreciationRules))
+    .map((asset) => {
+      const result = calculateDepreciation(asset, depreciationRules);
+      return `<div class="report-item"><strong>${escapeHtml(asset.inventoryNumber)} · ${escapeHtml(asset.name)}</strong><span>${escapeHtml(writeoffReason(asset, depreciationRules))} · Амортизация ${depreciationLabel(result.percent)} · остаточная ${formatMoney(result.residual)} · ${escapeHtml(asset.status)}</span></div>`;
+    });
   els.writeoffReport.innerHTML = candidates.join("") || `<div class="report-item"><strong>Пока нечего списывать</strong><span>Нет устройств с высокой амортизацией или потерей.</span></div>`;
 }
 
@@ -610,6 +603,7 @@ async function saveAssetFromForm(event) {
 
 function openDetails(asset) {
   if (!asset) return;
+  const depreciation = calculateDepreciation(asset, depreciationRules);
   document.querySelector("#details-title").textContent = `${asset.inventoryNumber} · ${asset.name}`;
   const repairs = state.repairs.filter((repair) => repair.assetId === asset.id);
   const movements = state.movements.filter((movement) => movement.assetId === asset.id);
@@ -622,7 +616,7 @@ function openDetails(asset) {
         <p><strong>Локация:</strong> ${escapeHtml(asset.location)}</p>
         <p><strong>Владелец:</strong> ${escapeHtml(asset.owner || "-")}</p>
         <p><strong>Статус:</strong> <span class="pill ${statusClass(asset.status)}">${escapeHtml(asset.status)}</span></p>
-        <p><strong>Стоимость:</strong> ${formatMoney(asset.cost)} · остаточная ${formatMoney(residualValue(asset))} · амортизация ${depreciationPercent(asset)}%</p>
+        <p><strong>Стоимость:</strong> ${formatMoney(asset.cost)} · остаточная ${formatMoney(depreciation.residual)} · амортизация ${depreciationLabel(depreciation.percent)}</p>
         ${serverMode && asset.qrToken ? `<p><a href="${escapeHtml(qrPayload(asset))}">Ссылка на паспорт</a></p>` : ""}
       </div>
     </div>
@@ -852,7 +846,10 @@ async function applyImport() {
 }
 
 function exportCsv(rows, filename) {
-  const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
+  const csv = rows.map((row) => row.map((cell) => {
+    const text = typeof cell === "string" && /^\s*[=+@-]/.test(cell) ? "'" + cell : String(cell);
+    return `"${text.replaceAll('"', '""')}"`;
+  }).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -939,8 +936,11 @@ function wireEvents() {
     exportCsv([["Локация", "Инвентарный номер", "Название", "Статус"], ...state.assets.map((asset) => [asset.location, asset.inventoryNumber, asset.name, asset.status])], "where-report.csv");
   });
   document.querySelector("#export-writeoff").addEventListener("click", () => {
-    const rows = state.assets.filter((asset) => depreciationPercent(asset) >= 90 || asset.status === "Потеряно");
-    exportCsv([["Инвентарный номер", "Название", "Амортизация", "Остаточная стоимость", "Статус"], ...rows.map((asset) => [asset.inventoryNumber, asset.name, `${depreciationPercent(asset)}%`, residualValue(asset), asset.status])], "writeoff-report.csv");
+    const rows = state.assets.filter((asset) => writeoffReason(asset, depreciationRules)).map((asset) => {
+      const result = calculateDepreciation(asset, depreciationRules);
+      return [asset.inventoryNumber, asset.name, depreciationLabel(result.percent), result.residual, asset.status, writeoffReason(asset, depreciationRules)];
+    });
+    exportCsv([["Инвентарный номер", "Название", "Амортизация", "Остаточная стоимость", "Статус", "Причина"], ...rows], "writeoff-report.csv");
   });
 }
 
@@ -953,6 +953,14 @@ if (serverMode) {
   document.querySelector("#unknown-name-field").hidden = false;
   document.querySelector("#finish-check-controls").hidden = false;
   document.querySelector("#saved-checks-panel").hidden = false;
+  document.querySelector("#excel-panel").hidden = false;
+  document.querySelector("#depreciation-panel").hidden = false;
+  wireExcelImport(refreshRegistry);
+  paintDepreciation = wireDepreciation(() => depreciationRules, (saved) => {
+    depreciationRules = saved;
+    renderDashboard();
+    renderReports();
+  });
   document.querySelector("#finish-check").addEventListener("click", finishCheck);
   document.querySelector("#refresh-checks").addEventListener("click", loadChecks);
   refreshRegistry().then(() => {

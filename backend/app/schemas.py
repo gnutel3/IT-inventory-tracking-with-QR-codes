@@ -67,6 +67,14 @@ class DeviceRead(DeviceBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DepreciationRules(BaseModel):
+    term_mode: Literal["device", "fixed"] = "device"
+    fixed_months: int = Field(36, ge=1, le=1200)
+    residual_floor_percent: int = Field(0, ge=0, le=99)
+    writeoff_threshold_percent: int = Field(90, ge=1, le=100)
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+
 class MovementRead(BaseModel):
     id: int
     device_id: int

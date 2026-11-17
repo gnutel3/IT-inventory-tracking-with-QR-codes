@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
 from app.models import Device, DeviceQrTag
-from app.routers import catalogs, devices, history
+from app.routers import catalogs, depreciation, devices, excel, history
 
 
 @asynccontextmanager
@@ -35,6 +35,8 @@ app.add_middleware(
 app.include_router(devices.router)
 app.include_router(catalogs.router)
 app.include_router(history.router)
+app.include_router(excel.router)
+app.include_router(depreciation.router)
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 
