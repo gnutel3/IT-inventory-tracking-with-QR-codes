@@ -2,6 +2,9 @@
 !backend/
 !backend/app/
 !backend/app/**
+!backend/migrations/
+!backend/migrations/**
+backend/migrations/**/__pycache__/
 backend/app/**/__pycache__/
 !backend/requirements.txt
 !backend/Dockerfile

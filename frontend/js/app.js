@@ -969,6 +969,7 @@ if (serverMode) {
   document.querySelector("#finish-check").addEventListener("click", finishCheck);
   document.querySelector("#refresh-checks").addEventListener("click", loadChecks);
   inventoryAuth.boot(async () => {
+    wirePeriodReport();
     await refreshRegistry();
     if (!serverLoaded) return;
     const params = new URLSearchParams(location.search);

@@ -194,6 +194,21 @@
         </section>
 
         <section class="view" id="reports-view" aria-labelledby="view-title">
+          <section class="panel stage-five-panel" id="period-report" hidden>
+            <div class="panel-heading"><h2>План списания за период</h2></div>
+            <form id="period-report-form" class="form-grid">
+              <label><span>Год</span><input name="year" type="number" min="2000" max="2100" required /></label>
+              <label><span>Период</span><select name="unit"><option value="month">Месяц</option><option value="quarter">Квартал</option><option value="year">Год</option></select></label>
+              <label id="period-number-label"><span>Номер периода</span><select name="number"></select></label>
+              <label><span>Включить</span><select name="scope"><option value="all">Всех кандидатов на конец периода</option><option value="new">Впервые достигших порога в периоде</option></select></label>
+              <div class="button-row">
+                <button type="submit" class="primary-button">Сформировать</button>
+                <button type="button" class="ghost-button" id="download-period-report" disabled>Скачать Excel</button>
+              </div>
+            </form>
+            <p id="period-report-status" role="status"></p>
+            <div id="period-report-results" class="report-list"></div>
+          </section>
           <details class="panel stage-five-panel" id="depreciation-panel" data-admin-only hidden>
             <summary>Правила амортизации</summary>
             <form class="form-grid" id="depreciation-form">
@@ -327,6 +342,7 @@
     <script src="./js/depreciation.js"></script>
     <script src="./js/excel-import.js"></script>
     <script src="./js/auth.js"></script>
+    <script src="./js/period-report.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

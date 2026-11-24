@@ -32,7 +32,8 @@ def sign_in(client, username="admin"):
 def test_anonymous_cannot_access_inventory(accounts):
     with TestClient(app) as client:
         for path in ("devices", "categories", "locations", "movements", "inventory-checks",
-                     "depreciation/rules", "import/xlsx/template", "auth/users", "auth/me"):
+                     "depreciation/rules", "import/xlsx/template", "reports/writeoff?year=2026",
+                     "auth/users", "auth/me"):
             assert client.get(f"/api/v1/{path}").status_code == 401, path
         assert client.get("/").status_code == 200
         assert client.post("/api/v1/devices", json={"name": "Hidden", "inventory_number": "NO"}).status_code == 401

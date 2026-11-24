@@ -5,7 +5,8 @@ from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal, engine
+from app.schema import require_current
 from app.models import LoginSession, User
 from app.routers.auth import UserCreate
 from app.security import passwords
@@ -24,7 +25,7 @@ def main():
         payload = UserCreate(username=args.username, password=password, role=args.role)
     except ValidationError:
         parser.exit(1, "Логин: 3–64 символа a-z, 0-9, _, -, точка. Пароль: 12–128 символов.\n")
-    Base.metadata.create_all(bind=engine)
+    require_current(engine)
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.username == payload.username))
         if args.action == "create":

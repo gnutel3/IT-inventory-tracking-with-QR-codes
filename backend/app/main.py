@@ -8,16 +8,16 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal, engine
+from app.schema import require_current
 from app.models import Device, DeviceQrTag
-from app.routers import auth, catalogs, depreciation, devices, excel, history
+from app.routers import auth, catalogs, depreciation, devices, excel, history, reports
 from app.security import admin_write, require_user
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Только для первого учебного этапа. На следующем этапе — Alembic.
-    Base.metadata.create_all(bind=engine)
+    require_current(engine)
     with SessionLocal.begin() as db:
         missing = db.scalars(select(Device.id).where(~Device.qr_tag.has()))
         db.add_all(DeviceQrTag(device_id=device_id) for device_id in missing)
@@ -32,6 +32,7 @@ app.include_router(catalogs.router, dependencies=[Depends(admin_write)])
 app.include_router(history.router, dependencies=[Depends(require_user)])
 app.include_router(excel.router, dependencies=[Depends(admin_write)])
 app.include_router(depreciation.router, dependencies=[Depends(admin_write)])
+app.include_router(reports.router, dependencies=[Depends(require_user)])
 
 
 @app.middleware("http")
