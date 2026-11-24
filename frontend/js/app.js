@@ -139,6 +139,7 @@ const titles = {
   inventory: "Мобильная инвентаризация",
   reports: "Отчеты",
   import: "Импорт из Excel",
+  users: "Пользователи",
 };
 
 const els = {
@@ -189,7 +190,7 @@ function saveState() {
 function setServerBusy(busy) {
   serverBusy = busy;
   document.querySelector("#refresh-registry").disabled = busy;
-  document.querySelector("#add-asset").disabled = busy || !serverLoaded;
+  document.querySelector("#add-asset").disabled = busy || !serverLoaded || !inventoryAuth.isAdmin();
   document.querySelector("#preview-import").disabled = busy || !serverLoaded;
   els.applyImport.disabled = busy || !serverLoaded || !pendingImportRows.length ||
     pendingImportRows.some((row) => row.errors.length);
@@ -459,11 +460,13 @@ function renderAll() {
 }
 
 function switchView(view) {
+  if (serverMode && !inventoryAuth.isAdmin() && ["import", "users"].includes(view)) return;
   if (view !== "inventory") stopQrScanner?.();
   els.nav.forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   els.views.forEach((section) => section.classList.toggle("active", section.id === `${view}-view`));
   els.title.textContent = titles[view];
   if (serverMode && view === "inventory") loadChecks();
+  if (serverMode && view === "users") inventoryAuth.loadUsers();
 }
 
 function parseScannedAsset(code) {
@@ -516,6 +519,7 @@ function addScan(code) {
 }
 
 function openAssetDialog(asset = null) {
+  if (serverMode && !inventoryAuth.isAdmin()) return;
   if (serverMode && (serverBusy || !serverLoaded)) return;
   stopQrScanner?.();
   document.querySelector("#asset-error").hidden = true;
@@ -539,6 +543,7 @@ function openAssetDialog(asset = null) {
 
 async function saveAssetFromForm(event) {
   event.preventDefault();
+  if (serverMode && !inventoryAuth.isAdmin()) return;
   const id = Number(document.querySelector("#asset-id").value);
   const formAsset = {
     id: id || Math.max(0, ...state.assets.map((asset) => asset.id)) + 1,
@@ -630,7 +635,7 @@ function openDetails(asset) {
         <button class="ghost-button" type="submit">Открыть ремонт</button>
       </form><p id="repair-status" role="status"></p>` : ""}
     </div>
-    <div class="button-row end"><button class="ghost-button" id="edit-current">Редактировать</button></div>
+    <div class="button-row end"><button class="ghost-button" id="edit-current" data-admin-only>Редактировать</button></div>
   `;
   document.querySelector("#edit-current").addEventListener("click", () => {
     els.assetDetails.close();
@@ -963,7 +968,8 @@ if (serverMode) {
   });
   document.querySelector("#finish-check").addEventListener("click", finishCheck);
   document.querySelector("#refresh-checks").addEventListener("click", loadChecks);
-  refreshRegistry().then(() => {
+  inventoryAuth.boot(async () => {
+    await refreshRegistry();
     if (!serverLoaded) return;
     const params = new URLSearchParams(location.search);
     if (!params.has("device")) return;

@@ -84,6 +84,33 @@ class DepreciationSettings(Base):
     writeoff_threshold_percent: Mapped[int]
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(16))
+    active: Mapped[bool] = mapped_column(default=True)
+
+
+class LoginSession(Base):
+    __tablename__ = "login_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    csrf_token: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[int]
+
+
+class LoginThrottle(Base):
+    __tablename__ = "login_throttle"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempts: Mapped[int]
+    reset_at: Mapped[int]
+
+
 class Movement(Base):
     __tablename__ = "device_movements"
 

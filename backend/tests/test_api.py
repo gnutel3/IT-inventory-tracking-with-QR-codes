@@ -1,14 +1,18 @@
-import os
-import tempfile
 from datetime import date
 from io import BytesIO
 
-# Отдельная временная БД для теста — не портим рабочую базу.
-tempdir = tempfile.mkdtemp(prefix="inventory-test-")
-os.environ["DATABASE_URL"] = f"sqlite:///{tempdir}/test.db"
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from app.main import app
+from app.models import User
+from app.security import require_user
+
+
+@pytest.fixture(autouse=True)
+def business_api_admin(clean_database):
+    # Auth and permission checks are exercised without overrides in test_auth.py.
+    app.dependency_overrides[require_user] = lambda: User(id=-1, username="test", role="admin", active=True)
 
 def test_device_crud():
     with TestClient(app) as client:

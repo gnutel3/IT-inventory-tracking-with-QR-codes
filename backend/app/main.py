@@ -1,15 +1,17 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
 from app.models import Device, DeviceQrTag
-from app.routers import catalogs, depreciation, devices, excel, history
+from app.routers import auth, catalogs, depreciation, devices, excel, history
+from app.security import admin_write, require_user
 
 
 @asynccontextmanager
@@ -24,19 +26,30 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="IT Inventory API", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:4173", "http://127.0.0.1:4173"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.include_router(auth.router)
+app.include_router(devices.router, dependencies=[Depends(admin_write)])
+app.include_router(catalogs.router, dependencies=[Depends(admin_write)])
+app.include_router(history.router, dependencies=[Depends(require_user)])
+app.include_router(excel.router, dependencies=[Depends(admin_write)])
+app.include_router(depreciation.router, dependencies=[Depends(admin_write)])
 
-app.include_router(devices.router)
-app.include_router(catalogs.router)
-app.include_router(history.router)
-app.include_router(excel.router)
-app.include_router(depreciation.router)
+
+@app.middleware("http")
+async def private_api(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, error: RequestValidationError):
+    # Do not reflect submitted passwords or form contents in API validation responses.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": list(item["loc"]), "msg": item["msg"], "type": item["type"]} for item in error.errors()
+    ]})
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 

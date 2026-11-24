@@ -1,4 +1,5 @@
 const inventoryApi = (() => {
+  let csrfToken = "";
   const statuses = {
     "В эксплуатации": "IN_USE",
     "На складе": "IN_STORAGE",
@@ -12,15 +13,24 @@ const inventoryApi = (() => {
     try {
       response = await fetch(`/api/v1/${path}`, {
         method,
+        credentials: "same-origin",
         cache: "no-store",
-        ...(data instanceof FormData ? { body: data } :
-          data && { headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }),
+        headers: {
+          "X-Inventory-Request": "1",
+          ...(csrfToken && { "X-CSRF-Token": csrfToken }),
+          ...(data && !(data instanceof FormData) && { "Content-Type": "application/json" }),
+        },
+        ...(data && { body: data instanceof FormData ? data : JSON.stringify(data) }),
       });
     } catch {
       throw new Error("Нет связи с сервером. Проверьте подключение и обновите реестр.");
     }
     const body = await response.json().catch(() => null);
+    if (response.status === 204) return null;
     if (!response.ok || !body) {
+      if (response.status === 401 && !["auth/login", "auth/me"].includes(path)) {
+        window.dispatchEvent(new Event("inventory-session-expired"));
+      }
       const detail = body?.detail;
       const message = Array.isArray(detail) ? detail.map((item) => item.loc.at(-1)).join(", ") : null;
       const error = new Error(message ? `Проверьте поля: ${message}` :
@@ -88,6 +98,7 @@ const inventoryApi = (() => {
 
   return {
     list, writer, request,
+    setCsrf(value) { csrfToken = value; },
     async movements(deviceId) {
       const rows = await request(deviceId ? `movements?device_id=${deviceId}` : "movements");
       return rows.map((row) => ({

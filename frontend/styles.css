@@ -572,6 +572,35 @@ dialog::backdrop {
   overflow-wrap: anywhere;
 }
 
+[hidden],
+.server-locked .app-shell,
+.employee-session [data-admin-only] {
+  display: none !important;
+}
+
+.server-locked #login-screen:not([hidden]) {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+#login-form {
+  display: grid;
+  width: 100%;
+  max-width: 380px;
+  gap: 16px;
+}
+
+#login-form h1 {
+  font-size: 28px;
+}
+
+#signed-in-user {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
